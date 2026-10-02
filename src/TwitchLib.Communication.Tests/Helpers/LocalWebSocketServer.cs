@@ -22,6 +22,7 @@ internal sealed class LocalWebSocketServer : IDisposable
     private TcpClient? _currentTcp;
     private WebSocket? _current;
     private int _connectionCount;
+    private int _openConnectionCount;
 
     public LocalWebSocketServer()
     {
@@ -32,6 +33,9 @@ internal sealed class LocalWebSocketServer : IDisposable
     public string Url => $"ws://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}/";
 
     public int ConnectionCount => Volatile.Read(ref _connectionCount);
+
+    /// <summary>Connections the client has not closed yet.</summary>
+    public int OpenConnectionCount => Volatile.Read(ref _openConnectionCount);
 
     public Task<bool> WaitForConnectionAsync(TimeSpan timeout)
     {
@@ -96,6 +100,7 @@ internal sealed class LocalWebSocketServer : IDisposable
             _currentTcp = tcp;
             _current = webSocket;
             Interlocked.Increment(ref _connectionCount);
+            Interlocked.Increment(ref _openConnectionCount);
             _ = DrainAsync(webSocket);
             _connected.Release();
         }
@@ -121,7 +126,7 @@ internal sealed class LocalWebSocketServer : IDisposable
         throw new InvalidOperationException("no Sec-WebSocket-Key in the upgrade request");
     }
 
-    private static async Task DrainAsync(WebSocket webSocket)
+    private async Task DrainAsync(WebSocket webSocket)
     {
         var buffer = new byte[1024];
         try
@@ -134,6 +139,10 @@ internal sealed class LocalWebSocketServer : IDisposable
         catch (Exception)
         {
             // the connection is gone, nothing to drain anymore
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _openConnectionCount);
         }
     }
 }

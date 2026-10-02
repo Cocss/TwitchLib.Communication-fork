@@ -142,6 +142,40 @@ public class WebSocketClientConnectionLossTests
         }
     }
 
+    [Fact]
+    public async Task Client_Opens_A_Single_Connection_For_Every_Connection_Loss()
+    {
+        using var server = new LocalWebSocketServer();
+        var client = CreateClient(server, new ReconnectionPolicy(100));
+        var reconnects = new SemaphoreSlim(0);
+        client.OnReconnected += (_, _) =>
+        {
+            reconnects.Release();
+            return Task.CompletedTask;
+        };
+
+        try
+        {
+            Assert.True(await client.OpenAsync());
+            Assert.True(await server.WaitForConnectionAsync(Timeout));
+
+            for (var loss = 1; loss <= 10; loss++)
+            {
+                server.Drop();
+                Assert.True(await reconnects.WaitAsync(Timeout), $"the client did not reconnect after connection loss {loss}");
+                // give a second, concurrent reconnect the time to show up
+                await Task.Delay(500);
+                Assert.Equal(loss + 1, server.ConnectionCount);
+            }
+
+            Assert.Equal(1, server.OpenConnectionCount);
+        }
+        finally
+        {
+            client.Dispose();
+        }
+    }
+
     private static LocalClient CreateClient(LocalWebSocketServer server, ReconnectionPolicy reconnectionPolicy)
     {
         return new LocalClient(server.Url, new ClientOptions(reconnectionPolicy, disconnectWait: 0));
