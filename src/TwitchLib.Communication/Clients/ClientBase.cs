@@ -309,6 +309,7 @@ public abstract class ClientBase<T> : IClient
             }
 
             Logger?.TraceAction(GetType(), "Client established a connection");
+            Options.ReconnectionPolicy.ConnectionEstablished();
             _networkServices.Start();
 
             if (!isReconnect)

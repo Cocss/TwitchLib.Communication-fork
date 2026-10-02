@@ -84,6 +84,36 @@ public class WebSocketClientConnectionLossTests
     }
 
     [Fact]
+    public async Task Client_Reconnects_After_More_Connection_Losses_Than_MaxAttempts()
+    {
+        // two attempts per connection loss, the connection is lost three times
+        using var server = new LocalWebSocketServer();
+        var client = CreateClient(server, new ReconnectionPolicy(100, maxAttempts: 2));
+        var reconnects = new SemaphoreSlim(0);
+        client.OnReconnected += (_, _) =>
+        {
+            reconnects.Release();
+            return Task.CompletedTask;
+        };
+
+        try
+        {
+            Assert.True(await client.OpenAsync());
+            Assert.True(await server.WaitForConnectionAsync(Timeout));
+
+            for (var loss = 1; loss <= 3; loss++)
+            {
+                server.Drop();
+                Assert.True(await reconnects.WaitAsync(Timeout), $"the client did not reconnect after connection loss {loss}");
+            }
+        }
+        finally
+        {
+            client.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task Client_Keeps_Reconnecting_When_An_OnReconnected_Subscriber_Throws()
     {
         using var server = new LocalWebSocketServer();
