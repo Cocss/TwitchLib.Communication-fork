@@ -1,0 +1,101 @@
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Threading.Tasks;
+using TwitchLib.Communication.Clients;
+using TwitchLib.Communication.Interfaces;
+using TwitchLib.Communication.Models;
+using TwitchLib.Communication.Tests.Helpers;
+using Xunit;
+
+namespace TwitchLib.Communication.Tests.Clients;
+
+/// <summary>
+///     The client must keep reading and keep reconnecting, whatever the server or the subscribers do.
+///     A client that stops doing either still reports <see cref="IClient.IsConnected"/>
+///     or just goes quiet, so the application never learns that it lost the connection.
+/// </summary>
+public class WebSocketClientConnectionLossTests
+{
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+
+    [Fact]
+    public async Task Client_Keeps_Reading_When_An_OnMessage_Subscriber_Throws()
+    {
+        using var server = new LocalWebSocketServer();
+        var client = CreateClient(server, new ReconnectionPolicy(100));
+        var errors = new ConcurrentQueue<Exception>();
+        var secondMessage = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.OnMessage += (_, e) =>
+        {
+            if (e.Message == "first") throw new InvalidOperationException("subscriber failed");
+            if (e.Message == "second") secondMessage.TrySetResult(true);
+            return Task.CompletedTask;
+        };
+        client.OnError += (_, e) =>
+        {
+            errors.Enqueue(e.Exception);
+            return Task.CompletedTask;
+        };
+
+        try
+        {
+            Assert.True(await client.OpenAsync());
+            Assert.True(await server.WaitForConnectionAsync(Timeout));
+
+            await server.SendAsync("first");
+            await server.SendAsync("second");
+
+            Assert.True(await CompletesAsync(secondMessage.Task), "the message after the failing one was not read");
+            Assert.Contains(errors, e => e is InvalidOperationException { Message: "subscriber failed" });
+        }
+        finally
+        {
+            client.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Client_Keeps_Reconnecting_When_An_OnReconnected_Subscriber_Throws()
+    {
+        using var server = new LocalWebSocketServer();
+        var client = CreateClient(server, new ReconnectionPolicy(100));
+        var reconnects = new SemaphoreSlim(0);
+        client.OnReconnected += (_, _) =>
+        {
+            reconnects.Release();
+            throw new InvalidOperationException("subscriber failed");
+        };
+
+        try
+        {
+            Assert.True(await client.OpenAsync());
+            Assert.True(await server.WaitForConnectionAsync(Timeout));
+
+            for (var loss = 1; loss <= 2; loss++)
+            {
+                server.Drop();
+                Assert.True(await reconnects.WaitAsync(Timeout), $"the client did not reconnect after connection loss {loss}");
+            }
+        }
+        finally
+        {
+            client.Dispose();
+        }
+    }
+
+    private static LocalClient CreateClient(LocalWebSocketServer server, ReconnectionPolicy reconnectionPolicy)
+    {
+        return new LocalClient(server.Url, new ClientOptions(reconnectionPolicy, disconnectWait: 0));
+    }
+
+    private static async Task<bool> CompletesAsync(Task task)
+    {
+        return await Task.WhenAny(task, Task.Delay(Timeout)) == task;
+    }
+
+    private sealed class LocalClient(string url, IClientOptions options) : WebSocketClient(options)
+    {
+        protected override string Url => url;
+    }
+}
