@@ -89,7 +89,7 @@ public class WebSocketClient : ClientBase<ClientWebSocket>
                     // handle it like any other lost connection, according to the ReconnectionPolicy.
                     // Calling CloseAsync() here stopped the ConnectionWatchDog as well,
                     // so the client never reconnected after the server had closed the connection.
-                    Logger?.TraceAction(GetType(), $"Server closed the connection: {Client.CloseStatus} {Client.CloseStatusDescription}");
+                    Logger?.TraceServerClosedConnection(GetType(), Client.CloseStatus, Client.CloseStatusDescription);
                     break;
                 case WebSocketMessageType.Text:
                     if (result.EndOfMessage && memoryStream.Position == 0)
